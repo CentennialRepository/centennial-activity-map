@@ -475,5 +475,6 @@ async function initMapAndRun() {
   }
 }
 
-// Kick off
-initMapAndRun();
+// Expose initMapAndRun globally for config.js
+window.initMapAndRun = initMapAndRun;
+// initMapAndRun() is now called from config.js after the API key is set.

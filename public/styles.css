@@ -1,3 +1,9 @@
+#map {
+	width: 100%;
+	height: 500px;
+	min-height: 300px;
+	background: #e5e5e5;
+}
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: #0f172a; }
 header { padding: 10px 12px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #e5e7eb; }

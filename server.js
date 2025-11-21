@@ -246,6 +246,11 @@ app.get("/api/health", async (_req, res) => {
   res.json({ ok: true, mode: CSV_URL === "" ? "airtable" : "csv", lastSync, lastFull, viewHash, now: Date.now() });
 });
 
+// Serve Google Maps API key securely
+app.get("/api/config", (_req, res) => {
+  res.json({ GMAPS_API_KEY: process.env.GMAPS_API_KEY || "" });
+});
+
 app.get("/api/stream", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
   const send = () => res.write(`event: projects-updated\ndata: {}\n\n`);
