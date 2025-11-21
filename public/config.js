@@ -1,1 +1,2 @@
-window.GMAPS_API_KEY = "AIzaSyCFaV3HsSSs2tzeAGCDA-ANrTAJJ-yuWgQ"; // paste your Google Maps browser key here
+// Google Maps API key should be injected securely, not hardcoded.
+window.GMAPS_API_KEY = window.GMAPS_API_KEY || ""; // Set via server or env at runtime
