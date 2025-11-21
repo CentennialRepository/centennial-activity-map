@@ -1,0 +1,31 @@
+# electron-builder.yml
+appId: com.centennial.activitymap
+productName: Centennial Activity Map
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - "!dist/"
+  - "!node_modules/.cache/**"
+  - "public/**"
+  - "server.js"
+  - "airtable.js"
+  - "data/**"
+  - ".env"
+  - ".env.example"
+  - "package.json"
+  - "electron/main.mjs"
+
+# NEW: also copy public/ outside app.asar → Resources/public
+extraResources:
+  - from: public
+    to: public
+
+mac:
+  target: dmg
+  category: public.app-category.business
+win:
+  target: nsis
+
+

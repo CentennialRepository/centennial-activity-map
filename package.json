@@ -1,0 +1,17 @@
+{
+  "name": "centennial-activity-map",
+  "version": "2.2.0",
+  "description": "Centennial Activity Map — Web app with NeDB cache, SSE live updates, and packaged-server import",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@seald-io/nedb": "^4.0.2",
+    "compression": "^1.7.4",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {}
+}

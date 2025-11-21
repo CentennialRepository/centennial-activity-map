@@ -1,0 +1,18 @@
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: #0f172a; }
+header { padding: 10px 12px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #e5e7eb; }
+h1 { font-size: 18px; margin: 0; }
+.controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.phase-filters label { margin-right: 10px; }
+.search input { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 240px; }
+.btn { padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer; }
+.status { color: #64748b; font-size: 12px; }
+#map { height: calc(100% - 60px); }
+
+.gm-legend { position: absolute; bottom: 16px; left: 16px; background: rgba(255,255,255,0.95); border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); font-size: 13px; line-height: 1.2; user-select: none; }
+.gm-legend .title { margin: 0 0 8px 0; font-weight: 600; font-size: 14px; }
+.gm-legend .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.gm-legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.gm-legend .label { white-space: nowrap; }
+#overlayError { position: absolute; inset: 60px 0 0 0; display: none; align-items: center; justify-content: center; background: #fff; color: #b91c1c; font-weight: 600; }
+#overlayError .box { border: 1px solid #fecaca; background: #fff5f5; padding: 16px 20px; border-radius: 8px; max-width: 720px; }
