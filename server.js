@@ -17,6 +17,7 @@ import fs from "fs";
 import os from "os";
 import { EventEmitter } from "events";
 import crypto from "crypto";
+import session from "express-session";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,21 +29,35 @@ dotenv.config();
 const app = express();
 app.use(compression());
 
+// parse urlencoded bodies (login form)
+app.use(express.urlencoded({ extended: true }));
+
+// Session setup (must be after app is initialized)
+app.use(session({
+  secret: process.env.SESSION_SECRET || "centennial_secret_key",
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+}));
+
+// Password for access (set in .env)
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "changeme";
+
 const PORT = Number(process.env.PORT || 5174);
 
 // -------------------- Config --------------------
-const AIRTABLE_BASE_ID   = process.env.AIRTABLE_BASE_ID   || "";
-const AIRTABLE_TABLE_NAME= process.env.AIRTABLE_TABLE_NAME|| "MIPP";
-const AIRTABLE_API_TOKEN = process.env.AIRTABLE_API_TOKEN || "";
-const AIRTABLE_VIEW_NAME = process.env.AIRTABLE_VIEW_NAME || "";
-const AIRTABLE_FIELDS    = (process.env.AIRTABLE_FIELDS || "")
+const AIRTABLE_BASE_ID    = process.env.AIRTABLE_BASE_ID    || "";
+const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME || "MIPP";
+const AIRTABLE_API_TOKEN  = process.env.AIRTABLE_API_TOKEN  || "";
+const AIRTABLE_VIEW_NAME  = process.env.AIRTABLE_VIEW_NAME || "";
+const AIRTABLE_FIELDS     = (process.env.AIRTABLE_FIELDS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 
 // If CSV URL is blank → PAT mode; if set → CSV (no PAT) mode
 const CSV_URL = (process.env.AIRTABLE_SHARED_CSV_URL || "").trim();
 
-const SYNC_TTL_MS        = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000); // default 10 min
-const FULL_RESYNC_HOURS  = Number(process.env.FULL_RESYNC_HOURS || 24);
+const SYNC_TTL_MS       = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000); // default 10 min
+const FULL_RESYNC_HOURS = Number(process.env.FULL_RESYNC_HOURS || 24);
 
 // -------------------- Writable data directory (never in app.asar) --------------------
 const dataDir = path.join(process.cwd(), "data");
@@ -81,7 +96,11 @@ function parseCSV(text) {
       else cell += ch;
     }
   }
-  row.push(cell); rows.push(row);
+  // if last line didn't end with newline
+  if (row.length > 0 || cell !== "") {
+    row.push(cell);
+    rows.push(row);
+  }
 
   const header = rows.shift() || [];
   const H = header.map(h => (h || "").trim());
@@ -118,8 +137,8 @@ function normalizeAirtable(records) {
       name: name || "",
       phase: phase || "",
       address: address || "",
-      lat: lat ?? null,
-      lng: lng ?? null,
+      lat: lat == null ? null : (Number(lat) || null),
+      lng: lng == null ? null : (Number(lng) || null),
       lastModified: lastMod || null,
     });
   }
@@ -160,7 +179,7 @@ const buildSinceFormula = (sinceIso) =>
 // -------------------- Sync engine --------------------
 async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
   const now = Date.now();
-  const patMode = CSV_URL === ""; // blank => PAT, set => CSV
+  const patMode = CSV_URL === ""; // blank CSV_URL => PAT (airtable) mode
   const lastSyncTs = (await getMeta("lastSync"))?.value || 0;
   const lastFullTs = (await getMeta("lastFullResync"))?.value || 0;
   const lastHash   = (await getMeta("viewHash"))?.value || null;
@@ -168,15 +187,18 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
   const ttlExpired  = forceSync || (now - lastSyncTs) > SYNC_TTL_MS;
   const fullExpired = (now - lastFullTs) > FULL_RESYNC_HOURS * 3600 * 1000;
 
-  let doFull = forceFull || !lastSyncTs || !patMode || fullExpired; // CSV => always full
+  // If CSV mode -> always full. Otherwise decide.
+  let doFull = forceFull || !lastSyncTs || !patMode || fullExpired; // if not patMode (CSV) -> force full
   if (!ttlExpired && !doFull) return { synced: false, reason: "fresh", mode: patMode ? "airtable" : "csv" };
 
   try {
     let records = [];
 
     if (!patMode) {
-      // CSV (no PAT) mode
-      const resp = await fetch(CSV_URL);
+      // CSV (no PAT) mode -> fetch CSV and normalize
+      // ensure we have a fetch function (Node 18+ has global fetch)
+      const fetchFn = globalThis.fetch ?? (await import('node-fetch')).default;
+      const resp = await fetchFn(CSV_URL);
       if (!resp.ok) throw new Error(`CSV fetch failed: ${resp.status}`);
       const text = await resp.text();
       records = normalizeCSV(text);
@@ -223,16 +245,44 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
       return { synced: true, mode: "airtable", full: false, changed: records.length };
     }
   } catch (e) {
-    return { synced: false, mode: (CSV_URL==="" ? "airtable" : "csv"), error: e.message };
+    return { synced: false, mode: patMode ? "airtable" : "csv", error: e.message };
   }
 }
 
 // -------------------- Static UI resolution --------------------
 const PUBLIC_DIR = path.join(process.cwd(), "public");
+
+// Middleware to protect app routes (depends on PUBLIC_DIR existing)
+function requireAuth(req, res, next) {
+  if (req.session && req.session.authenticated) return next();
+  // If not authenticated, show login page (if available) else 401
+  const loginPath = path.join(PUBLIC_DIR, "login.html");
+  if (fs.existsSync(loginPath)) return res.sendFile(loginPath);
+  return res.status(401).send("Authentication required");
+}
+
+// Login route
+app.post("/login", (req, res) => {
+  const { password } = req.body || {};
+  if (password === SITE_PASSWORD) {
+    req.session.authenticated = true;
+    return res.redirect("/");
+  } else {
+    const loginPath = path.join(PUBLIC_DIR, "login.html");
+    if (fs.existsSync(loginPath)) return res.sendFile(loginPath);
+    return res.status(403).send("Invalid password");
+  }
+});
+
 if (fs.existsSync(path.join(PUBLIC_DIR, "index.html"))) {
   console.log("Serving static from:", PUBLIC_DIR);
   app.use(express.static(PUBLIC_DIR));
-  app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+  // Protect main app route
+  app.get("/", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
+  // Allow login page to be accessed
+  app.get("/login", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
+  // All other non-API routes redirect to /
+  app.get(/^(?!\/api).*/, requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 } else {
   console.warn("WARNING: public/ bundle not found. Static UI will not load.");
   app.get(/^(?!\/api).*/, (_req, res) => res.status(500).send("Static bundle missing"));
@@ -253,7 +303,11 @@ app.get("/api/config", (_req, res) => {
 
 app.get("/api/stream", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
-  const send = () => res.write(`event: projects-updated\ndata: {}\n\n`);
+  // optional flush if available (helps some environments)
+  res.flush?.();
+  const send = () => {
+    try { res.write(`event: projects-updated\ndata: {}\n\n`); } catch (_) { /* ignore write errors */ }
+  };
   notifier.on("projects-updated", send);
   req.on("close", () => notifier.off("projects-updated", send));
 });
@@ -267,7 +321,7 @@ app.get("/api/projects", async (req, res) => {
 
   res.set("X-Mode", CSV_URL === "" ? "AIRTABLE" : "CSV");
   res.set("X-Sync", info.synced ? (info.full ? "FULL" : "INCR") : "HIT");
-  res.json({ source: "nedb", count: docs.length, records: docs });
+  res.json({ source: "nedb", count: docs.length, records: docs, sync: info });
 });
 
 // -------------------- Start server (fail fast on error) --------------------
