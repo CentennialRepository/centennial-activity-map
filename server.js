@@ -258,14 +258,27 @@ const PUBLIC_DIR = path.join(process.cwd(), "public");
 
 // requireAuth: allow /login and /api/*; protect everything else
 function requireAuth(req, res, next) {
-  // allow public endpoints
-  if (req.path === "/login" || req.path === "/login.html" || req.path.startsWith("/api")) {
+  const publicPaths = ["/login", "/login.html"];
+
+  // Allow public pages
+  if (publicPaths.includes(req.path)) {
     return next();
   }
-  if (req.session && req.session.authenticated) return next();
-  // redirect to login
+
+  // Allow API routes WITHOUT auth (optional)
+  if (req.path.startsWith("/api")) {
+    return next();
+  }
+
+  // Require login for everything else
+  if (req.session && req.session.authenticated) {
+    return next();
+  }
+
+  // Redirect to login
   return res.redirect("/login");
 }
+
 
 // ensure login route available BEFORE static middleware
 app.get("/login", (_req, res) => {
