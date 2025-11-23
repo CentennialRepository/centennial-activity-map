@@ -1,10 +1,7 @@
-// server.js — Centennial Activity Map (Electron-packaged safe)
-// - PAT-first (CSV optional)
-// - NeDB cache in a writable user folder
-// - SSE push updates
-// - Robust .env loading (dev + packaged)
-// - Static UI resolution (inside/outside asar)
-// - Error-aware server start (fails fast instead of timing out)
+// server.js — Centennial Activity Map (fixed routing + session handling + auto-open)
+// Supports: local dev (Electron), and Render web service (HTTPS)
+// Protects: everything except /login and /api/*
+// Session TTL controlled via SESSION_TTL_MS (default = 7 days)
 
 import express from "express";
 import path from "path";
@@ -18,31 +15,48 @@ import os from "os";
 import { EventEmitter } from "events";
 import crypto from "crypto";
 import session from "express-session";
+import open from "open";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// -------------------- .env loading (works in dev + packaged) --------------------
+// load env
 dotenv.config();
 
-// -------------------- Express setup --------------------
+// -------------------- Basic app setup --------------------
 const app = express();
 app.use(compression());
-
-// parse urlencoded bodies (login form)
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json()); // in case front-end needs JSON
 
-// Session setup (must be after app is initialized)
+// detect environment for cookie policy
+const RUNNING_ON_RENDER = !!(process.env.RENDER || process.env.RENDER_SERVICE_ID);
+if (RUNNING_ON_RENDER) {
+  // trust proxy so secure cookies and req.protocol work correctly behind Render's proxy
+  app.set("trust proxy", 1);
+}
+
+// session config
+const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 604800000); // default 7 days
+const SESSION_SECRET = process.env.SESSION_SECRET || "centennial_secret_key";
+
+const cookieOpts = {
+  maxAge: SESSION_TTL_MS,
+  httpOnly: true,
+  // allow override via env (for testing)
+  secure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : RUNNING_ON_RENDER,
+  sameSite: process.env.COOKIE_SAMESITE || (RUNNING_ON_RENDER ? "none" : "lax")
+};
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || "centennial_secret_key",
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+  cookie: cookieOpts
 }));
 
 // Password for access (set in .env)
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "changeme";
-
 const PORT = Number(process.env.PORT || 5174);
 
 // -------------------- Config --------------------
@@ -53,13 +67,11 @@ const AIRTABLE_VIEW_NAME  = process.env.AIRTABLE_VIEW_NAME || "";
 const AIRTABLE_FIELDS     = (process.env.AIRTABLE_FIELDS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 
-// If CSV URL is blank → PAT mode; if set → CSV (no PAT) mode
 const CSV_URL = (process.env.AIRTABLE_SHARED_CSV_URL || "").trim();
-
-const SYNC_TTL_MS       = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000); // default 10 min
+const SYNC_TTL_MS       = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000);
 const FULL_RESYNC_HOURS = Number(process.env.FULL_RESYNC_HOURS || 24);
 
-// -------------------- Writable data directory (never in app.asar) --------------------
+// -------------------- Writable data directory --------------------
 const dataDir = path.join(process.cwd(), "data");
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -79,7 +91,6 @@ const notifier = new EventEmitter();
 const sha1 = (s) => crypto.createHash("sha1").update(String(s)).digest("hex");
 
 function parseCSV(text) {
-  // minimal robust CSV parser (handles quoted fields, commas, CRLF)
   const rows = [];
   let row = [], cell = "", inQ = false;
   for (let i = 0; i < text.length; i++) {
@@ -96,12 +107,10 @@ function parseCSV(text) {
       else cell += ch;
     }
   }
-  // if last line didn't end with newline
   if (row.length > 0 || cell !== "") {
     row.push(cell);
     rows.push(row);
   }
-
   const header = rows.shift() || [];
   const H = header.map(h => (h || "").trim());
   return rows
@@ -179,7 +188,7 @@ const buildSinceFormula = (sinceIso) =>
 // -------------------- Sync engine --------------------
 async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
   const now = Date.now();
-  const patMode = CSV_URL === ""; // blank CSV_URL => PAT (airtable) mode
+  const patMode = CSV_URL === "";
   const lastSyncTs = (await getMeta("lastSync"))?.value || 0;
   const lastFullTs = (await getMeta("lastFullResync"))?.value || 0;
   const lastHash   = (await getMeta("viewHash"))?.value || null;
@@ -187,24 +196,20 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
   const ttlExpired  = forceSync || (now - lastSyncTs) > SYNC_TTL_MS;
   const fullExpired = (now - lastFullTs) > FULL_RESYNC_HOURS * 3600 * 1000;
 
-  // If CSV mode -> always full. Otherwise decide.
-  let doFull = forceFull || !lastSyncTs || !patMode || fullExpired; // if not patMode (CSV) -> force full
+  let doFull = forceFull || !lastSyncTs || !patMode || fullExpired;
   if (!ttlExpired && !doFull) return { synced: false, reason: "fresh", mode: patMode ? "airtable" : "csv" };
 
   try {
     let records = [];
 
     if (!patMode) {
-      // CSV (no PAT) mode -> fetch CSV and normalize
-      // ensure we have a fetch function (Node 18+ has global fetch)
       const fetchFn = globalThis.fetch ?? (await import('node-fetch')).default;
       const resp = await fetchFn(CSV_URL);
       if (!resp.ok) throw new Error(`CSV fetch failed: ${resp.status}`);
       const text = await resp.text();
       records = normalizeCSV(text);
-      doFull = true; // always full replace for CSV
+      doFull = true;
     } else {
-      // Airtable PAT mode
       if (doFull) {
         const recs = await fetchAllRecords({
           baseId: AIRTABLE_BASE_ID,
@@ -215,7 +220,6 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
         });
         records = normalizeAirtable(recs);
       } else {
-        // incremental by last modified time
         const sinceIso = new Date(lastSyncTs).toISOString();
         const filterByFormula = buildSinceFormula(sinceIso);
         const recs = await fetchAllRecords({
@@ -232,14 +236,14 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
 
     if (doFull) {
       const fp = viewFingerprint(records, AIRTABLE_VIEW_NAME);
-      await replaceAll(records);                 // prune + reload
+      await replaceAll(records);
       await setMeta("viewHash", fp);
       await setMeta("lastFullResync", now);
       await setMeta("lastSync", now);
       notifier.emit("projects-updated");
       return { synced: true, mode: patMode ? "airtable" : "csv", full: true, changed: records.length, fingerprint: fp };
     } else {
-      await upsertMany(records);                 // incremental upsert only
+      await upsertMany(records);
       await setMeta("lastSync", now);
       notifier.emit("projects-updated");
       return { synced: true, mode: "airtable", full: false, changed: records.length };
@@ -249,39 +253,57 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
   }
 }
 
-// -------------------- Static UI resolution --------------------
+// -------------------- Static UI & Auth --------------------
 const PUBLIC_DIR = path.join(process.cwd(), "public");
 
-// Middleware to protect app routes (depends on PUBLIC_DIR existing)
+// requireAuth: allow /login and /api/*; protect everything else
 function requireAuth(req, res, next) {
+  // allow public endpoints
+  if (req.path === "/login" || req.path === "/login.html" || req.path.startsWith("/api")) {
+    return next();
+  }
   if (req.session && req.session.authenticated) return next();
-  // If not authenticated, show login page (if available) else 401
-  const loginPath = path.join(PUBLIC_DIR, "login.html");
-  if (fs.existsSync(loginPath)) return res.sendFile(loginPath);
-  return res.status(401).send("Authentication required");
+  // redirect to login
+  return res.redirect("/login");
 }
 
-// Login route
+// ensure login route available BEFORE static middleware
+app.get("/login", (_req, res) => {
+  const loginPath = path.join(PUBLIC_DIR, "login.html");
+  if (fs.existsSync(loginPath)) return res.sendFile(loginPath);
+  return res.status(404).send("login.html missing");
+});
+
+// handle login POST
 app.post("/login", (req, res) => {
   const { password } = req.body || {};
   if (password === SITE_PASSWORD) {
     req.session.authenticated = true;
-    return res.redirect("/");
-  } else {
-    const loginPath = path.join(PUBLIC_DIR, "login.html");
-    if (fs.existsSync(loginPath)) return res.sendFile(loginPath);
-    return res.status(403).send("Invalid password");
+    // ensure cookie immediate set: save session then redirect
+    req.session.save(err => {
+      if (err) {
+        console.warn("session save error:", err);
+      }
+      return res.redirect("/");
+    });
+    return;
   }
+  const loginPath = path.join(PUBLIC_DIR, "login.html");
+  if (fs.existsSync(loginPath)) return res.status(401).sendFile(loginPath);
+  return res.status(403).send("Invalid password");
 });
 
+// serve static assets
+app.use(express.static(PUBLIC_DIR));
+
+// index + fallback routes (protected)
 if (fs.existsSync(path.join(PUBLIC_DIR, "index.html"))) {
   console.log("Serving static from:", PUBLIC_DIR);
-  app.use(express.static(PUBLIC_DIR));
-  // Protect main app route
+
+  // root
   app.get("/", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
-  // Allow login page to be accessed
-  app.get("/login", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "login.html")));
-  // All other non-API routes redirect to /
+
+  // any other non-api route -> serve index (SPA), but require auth
   app.get(/^(?!\/api).*/, requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 } else {
   console.warn("WARNING: public/ bundle not found. Static UI will not load.");
@@ -296,17 +318,15 @@ app.get("/api/health", async (_req, res) => {
   res.json({ ok: true, mode: CSV_URL === "" ? "airtable" : "csv", lastSync, lastFull, viewHash, now: Date.now() });
 });
 
-// Serve Google Maps API key securely
 app.get("/api/config", (_req, res) => {
   res.json({ GMAPS_API_KEY: process.env.GMAPS_API_KEY || "" });
 });
 
 app.get("/api/stream", (req, res) => {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
-  // optional flush if available (helps some environments)
   res.flush?.();
   const send = () => {
-    try { res.write(`event: projects-updated\ndata: {}\n\n`); } catch (_) { /* ignore write errors */ }
+    try { res.write(`event: projects-updated\ndata: {}\n\n`); } catch (_) {}
   };
   notifier.on("projects-updated", send);
   req.on("close", () => notifier.off("projects-updated", send));
@@ -324,12 +344,24 @@ app.get("/api/projects", async (req, res) => {
   res.json({ source: "nedb", count: docs.length, records: docs, sync: info });
 });
 
-// -------------------- Start server (fail fast on error) --------------------
+// -------------------- Start server --------------------
 await new Promise((resolve, reject) => {
-  const srv = app.listen(PORT, () => {
-    console.log(`Centennial Activity Map running on http://localhost:${PORT} (mode=${CSV_URL === "" ? "AIRTABLE" : "CSV"})`);
+  const srv = app.listen(PORT, async () => {
+    const url = `http://localhost:${PORT}/login`;
+    console.log(`Centennial Activity Map running on ${url} (mode=${CSV_URL === "" ? "AIRTABLE" : "CSV"})`);
+
+    // Auto-open the browser in non-production (local dev). If you want it always, remove the NODE_ENV check.
+    try {
+      if (process.env.NODE_ENV !== "production") {
+        await open(url);
+      }
+    } catch (err) {
+      console.warn("Could not open browser automatically:", err);
+    }
+
     resolve(srv);
   });
+
   srv.on("error", (err) => {
     console.error("Failed to start server:", err);
     reject(err);
