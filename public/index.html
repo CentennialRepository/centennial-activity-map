@@ -4,13 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Centennial Activity Map</title>
+    <!-- Professional font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div id="app">
-      <header>
-        <h1>Centennial Activity Map v2.5</h1>
-        <div class="controls">
+      <header class="site-header">
+        <div class="brand-row">
+          <h1>Centennial Activity Map v2.5</h1>
+          <div class="header-actions">
+            <button id="themeToggle" class="theme-toggle" aria-label="Toggle dark mode">Dark</button>
+            <button id="menuToggle" class="menu-toggle" aria-expanded="false" aria-controls="controlPanel">☰</button>
+          </div>
+        </div>
+        <div id="controlPanel" class="controls">
           <div class="phase-filters">
             <label><input type="checkbox" data-phase="Not Helioscoped" checked> Not Helioscoped</label>
             <label><input type="checkbox" data-phase="Helioscoped Projects" checked> Helioscoped</label>
@@ -27,6 +37,11 @@
       </header>
 
       <div id="map"></div>
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="skeleton-bar"></div>
+        <div class="skeleton-bar" style="width:220px"></div>
+      </div>
       <div id="overlayError" style="display:none;"></div>
     </div>
 
@@ -34,5 +49,33 @@
     <script src="./config.js"></script>
     <!-- The app logic -->
     <script type="module" src="./app-google.js"></script>
+    <script>
+      // Theme init & toggle
+      const body = document.body;
+      const savedTheme = localStorage.getItem('cam_theme');
+      if (savedTheme === 'dark') body.setAttribute('data-theme','dark');
+      const themeBtn = document.getElementById('themeToggle');
+      function updateThemeButton() {
+        const dark = body.getAttribute('data-theme') === 'dark';
+        themeBtn.textContent = dark ? 'Light' : 'Dark';
+      }
+      updateThemeButton();
+      themeBtn.addEventListener('click', () => {
+        const dark = body.getAttribute('data-theme') === 'dark';
+        if (dark) body.removeAttribute('data-theme'); else body.setAttribute('data-theme','dark');
+        localStorage.setItem('cam_theme', body.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+        updateThemeButton();
+      });
+
+      // Mobile menu toggle
+      const toggleBtn = document.getElementById('menuToggle');
+      const panel = document.getElementById('controlPanel');
+      if (toggleBtn && panel) {
+        toggleBtn.addEventListener('click', () => {
+          const open = panel.classList.toggle('open');
+          toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    </script>
   </body>
 </html>

@@ -31,6 +31,23 @@ let map, geocoder;
 let markersById = new Map();
 let currentFilterText = "";
 const enabledPhases = new Set(Object.keys(PHASE_COLORS));
+// Phase filter persistence
+const PHASE_STORE_KEY = 'cam_phase_filters_v1';
+function loadPhasePrefs() {
+  try {
+    const raw = localStorage.getItem(PHASE_STORE_KEY);
+    if (!raw) return;
+    const list = JSON.parse(raw);
+    if (Array.isArray(list) && list.length) {
+      enabledPhases.clear();
+      for (const p of list) enabledPhases.add(p);
+    }
+  } catch {}
+}
+function savePhasePrefs() {
+  try { localStorage.setItem(PHASE_STORE_KEY, JSON.stringify(Array.from(enabledPhases))); } catch {}
+}
+loadPhasePrefs();
 let firstFitDone = false;
 let legendEl = null;
 let lastLegendCounts = {};
@@ -212,6 +229,8 @@ function addLegendControl() {
   legendEl.querySelectorAll(".row").forEach(row => {
     const phase = row.dataset.phase;
     row.style.cursor = "pointer";
+    // Initial opacity reflects persisted state
+    row.style.opacity = enabledPhases.has(phase) ? 1 : 0.45;
     row.addEventListener("click", () => {
       if (enabledPhases.has(phase)) {
         enabledPhases.delete(phase);
@@ -221,6 +240,7 @@ function addLegendControl() {
         row.style.opacity = 1;
       }
       applyFilters();
+      savePhasePrefs();
     });
   });
   updateLegendCounts(lastLegendCounts);
@@ -332,6 +352,11 @@ async function renderRecordsProgressively(records) {
   setStatus(`Loaded ${idSet.size} projects`);
 }
 
+// Loading overlay helpers
+const loadingOverlay = () => document.getElementById('loadingOverlay');
+function showLoading() { const el = loadingOverlay(); if (el) el.style.display = 'flex'; }
+function hideLoading() { const el = loadingOverlay(); if (el) el.style.display = 'none'; }
+
 async function fetchProjects(opts = {}) {
   const query = [];
   if (opts.force) query.push("force=1");
@@ -339,6 +364,7 @@ async function fetchProjects(opts = {}) {
   const qs = query.length ? `?${query.join("&")}` : "";
 
   setStatus(opts.force ? "Refreshing…" : "Loading…");
+  showLoading();
   try {
     const res = await fetch(`/api/projects${qs}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -348,10 +374,12 @@ async function fetchProjects(opts = {}) {
     if (!opts.force) firstFitDone = false;
 
     await renderRecordsProgressively(json.records || []);
+    hideLoading();
   } catch (e) {
     console.error(e);
     showOverlayError(e && e.message ? e.message : "Error loading data");
     setStatus("Error loading data");
+    hideLoading();
   }
 }
 
@@ -360,11 +388,14 @@ async function fetchProjects(opts = {}) {
 ////////////////////////////////////////////////////////////////////////////////
 function initUI() {
   document.querySelectorAll('input[type="checkbox"][data-phase]').forEach(cb => {
+    const phase = cb.getAttribute('data-phase');
+    cb.checked = enabledPhases.has(phase);
     cb.addEventListener("change", (e) => {
       const phase = e.target.getAttribute("data-phase");
       if (e.target.checked) enabledPhases.add(phase);
       else enabledPhases.delete(phase);
       applyFilters();
+      savePhasePrefs();
     });
   });
 
