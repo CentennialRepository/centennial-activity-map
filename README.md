@@ -17,11 +17,16 @@ AIRTABLE_VIEW_NAME=
 AIRTABLE_FIELDS=
 AIRTABLE_SHARED_CSV_URL=
 ```
-2) Paste your Google Maps key into `public/config.js`.
-3) Launch desktop:
+2) Add your Google Maps key in `.env` as `GMAPS_API_KEY=...` (the frontend fetches it from `/api/config`).
+3) (Optional but recommended) Protect access with a password by setting in `.env`:
+```
+SITE_PASSWORD=your_shared_password
+SESSION_SECRET=some_random_long_secret
+```
+4) Launch desktop:
    - macOS: `run-mac.command`
    - Windows: `run-windows.bat`
-4) Check:
+5) Check:
    - `http://localhost:5174/api/health` → mode `airtable`
    - `http://localhost:5174/api/projects` → JSON with `records`
 
