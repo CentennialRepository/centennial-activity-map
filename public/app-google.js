@@ -21,7 +21,8 @@ const PHASE_ORDER = [
 ];
 
 const REFRESH_MS = 300000;        // 5 minutes polling (SSE also pushes)
-const GEOCODE_DELAY_MS = 200;     // gentle throttle for client-side geocoding
+const GEOCODE_DELAY_MS = 50;      // gentle throttle for client-side geocoding
+const GEOCODE_CONCURRENCY = 10;   // number of parallel geocoding requests
 const DOT_SCALE = 11, DOT_STROKE = 2, DOT_HOVER_DELTA = 3, DOT_MIN = 8, DOT_MAX = 24;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -333,18 +334,24 @@ async function renderRecordsProgressively(records) {
   fitBoundsIfNeeded();
   setStatus(`Loaded ${idSet.size} projects (coords)`);
 
-  // Geocode the rest progressively
+  // Geocode the rest with limited concurrency for faster initial load
   let done = 0, total = need.length;
-  for (const r of need) {
-    const coords = await geocodeAddress(r.address);
-    await sleep(GEOCODE_DELAY_MS);
-    done++;
-    if (coords) {
-      createOrUpdateMarker({ ...r, lat: coords.lat, lng: coords.lng });
-      idSet.add(r.id);
+  let idx = 0;
+  const worker = async () => {
+    while (idx < need.length) {
+      const r = need[idx++];
+      const coords = await geocodeAddress(r.address);
+      if (GEOCODE_DELAY_MS > 0) await sleep(GEOCODE_DELAY_MS);
+      done++;
+      if (coords) {
+        createOrUpdateMarker({ ...r, lat: coords.lat, lng: coords.lng });
+        idSet.add(r.id);
+      }
+      if (done % 50 === 0) setStatus(`Geocoding ${done}/${total}…`);
     }
-    if (done % 25 === 0) setStatus(`Geocoding ${done}/${total}…`);
-  }
+  };
+  const workers = Array.from({ length: Math.min(GEOCODE_CONCURRENCY, need.length) }, () => worker());
+  await Promise.all(workers);
 
   // Remove markers no longer in view
   removeMarkersNotIn(idSet);
@@ -352,10 +359,10 @@ async function renderRecordsProgressively(records) {
   setStatus(`Loaded ${idSet.size} projects`);
 }
 
-// Loading overlay helpers
-const loadingOverlay = () => document.getElementById('loadingOverlay');
-function showLoading() { const el = loadingOverlay(); if (el) el.style.display = 'flex'; }
-function hideLoading() { const el = loadingOverlay(); if (el) el.style.display = 'none'; }
+// Loading overlay helpers (unused)
+// const loadingOverlay = () => document.getElementById('loadingOverlay');
+// function showLoading() { const el = loadingOverlay(); if (el) el.style.display = 'flex'; }
+// function hideLoading() { const el = loadingOverlay(); if (el) el.style.display = 'none'; }
 
 async function fetchProjects(opts = {}) {
   const query = [];
@@ -364,7 +371,6 @@ async function fetchProjects(opts = {}) {
   const qs = query.length ? `?${query.join("&")}` : "";
 
   setStatus(opts.force ? "Refreshing…" : "Loading…");
-  showLoading();
   try {
     const res = await fetch(`/api/projects${qs}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -374,12 +380,10 @@ async function fetchProjects(opts = {}) {
     if (!opts.force) firstFitDone = false;
 
     await renderRecordsProgressively(json.records || []);
-    hideLoading();
   } catch (e) {
     console.error(e);
     showOverlayError(e && e.message ? e.message : "Error loading data");
     setStatus("Error loading data");
-    hideLoading();
   }
 }
 
