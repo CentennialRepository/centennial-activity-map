@@ -27,9 +27,11 @@
             <label><input type="checkbox" data-phase="Early Stage Pipeline Projects" checked> Early</label>
             <label><input type="checkbox" data-phase="Late Stage Pipeline Projects" checked> Late</label>
             <label><input type="checkbox" data-phase="Operating Projects" checked> Operating</label>
+            <label><input type="checkbox" data-phase="Other" checked> Other</label>
           </div>
           <div class="search">
-            <input id="searchBox" type="text" placeholder="Search project name..." />
+            <input id="searchBox" type="text" placeholder="Search project name..." autocomplete="off" />
+            <div id="autocompleteDropdown" class="autocomplete-dropdown"></div>
           </div>
           <button id="refreshBtn" class="btn">Refresh</button>
           <div class="status" id="status"></div>

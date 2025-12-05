@@ -34,11 +34,9 @@ app.use(express.json());
 
 // Detect environment - Render sets these env vars
 const RUNNING_ON_RENDER = !!(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL);
-console.log("Running on Render:", RUNNING_ON_RENDER);
 if (RUNNING_ON_RENDER) {
   // trust proxy so secure cookies and req.protocol work correctly behind Render's proxy
   app.set("trust proxy", 1);
-  console.log("Trust proxy enabled for Render");
 }
 
 // -------------------- Session store (Redis in prod, Memory for dev) --------------------
@@ -55,14 +53,14 @@ if (process.env.REDIS_URL) {
 
     sessionStore = new RedisStore({ client: redisClient });
     usingRedis = true;
-    console.log("Session store: Redis (REDIS_URL detected)");
+    // Using Redis for session storage
   } catch (err) {
     console.error("Failed to initialize Redis session store — falling back to MemoryStore:", err);
     sessionStore = undefined;
   }
 } else {
   sessionStore = undefined; // express-session will use MemoryStore for local dev
-  console.warn("Session store: MemoryStore (not suitable for production). Set REDIS_URL to enable Redis.");
+  // MemoryStore is for local dev only
 }
 
 // -------------------- Session config --------------------
@@ -93,13 +91,7 @@ app.use(
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "changeme";
 const PORT = Number(process.env.PORT || 5174);
 
-console.log("Auth config:", {
-  hasSitePassword: !!process.env.SITE_PASSWORD,
-  hasSessionSecret: !!process.env.SESSION_SECRET,
-  usingRedis,
-  cookieSecure: cookieOpts.secure,
-  cookieSameSite: cookieOpts.sameSite
-});
+// Basic auth configuration derived from environment
 
 // -------------------- Config constants --------------------
 const AIRTABLE_BASE_ID    = process.env.AIRTABLE_BASE_ID    || "";
@@ -310,11 +302,9 @@ function requireAuth(req, res, next) {
 
   // Require login for everything else
   const isAuthenticated = req.session && req.session.authenticated;
-  console.log(`Auth check for ${req.path} - authenticated:`, isAuthenticated);
   if (isAuthenticated) return next();
 
   // Redirect to login
-  console.log(`Redirecting to /login from ${req.path}`);
   return res.redirect("/login");
 }
 
@@ -328,18 +318,14 @@ app.get("/login", (_req, res) => {
 // handle login POST
 app.post("/login", (req, res) => {
   const { password } = req.body || {};
-  console.log("Login attempt - password provided:", !!password, "SITE_PASSWORD set:", !!SITE_PASSWORD);
   if (password === SITE_PASSWORD) {
-    console.log("Password correct, setting session");
     req.session.authenticated = true;
     req.session.save(err => {
       if (err) console.warn("session save error:", err);
-      console.log("Session saved, redirecting to /");
       return res.redirect("/");
     });
     return;
   }
-  console.log("Password incorrect");
   const loginPath = path.join(PUBLIC_DIR, "login.html");
   if (fs.existsSync(loginPath)) return res.status(401).sendFile(loginPath);
   return res.status(403).send("Invalid password");
@@ -403,7 +389,6 @@ app.get("/api/projects", async (req, res) => {
 
 // -------------------- Protected SPA fallback (must be after /api/*) --------------------
 if (fs.existsSync(path.join(PUBLIC_DIR, "index.html"))) {
-  console.log("Serving static from:", PUBLIC_DIR);
 
   // root
   app.get("/", requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
@@ -411,7 +396,6 @@ if (fs.existsSync(path.join(PUBLIC_DIR, "index.html"))) {
   // any other non-api route -> serve index (SPA), but require auth
   app.get(/^(?!\/api).*/, requireAuth, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
 } else {
-  console.warn("WARNING: public/ bundle not found. Static UI will not load.");
   app.get(/^(?!\/api).*/, (_req, res) => res.status(500).send("Static bundle missing"));
 }
 
@@ -419,7 +403,6 @@ if (fs.existsSync(path.join(PUBLIC_DIR, "index.html"))) {
 await new Promise((resolve, reject) => {
   const srv = app.listen(PORT, async () => {
     const url = `http://localhost:${PORT}/login`;
-    console.log(`Centennial Activity Map running on ${url} (mode=${CSV_URL === "" ? "AIRTABLE" : "CSV"})`);
 
     // Auto-open the browser ONLY for local dev (not in Render/production)
     const isLocalDev = !RUNNING_ON_RENDER && (!process.env.NODE_ENV || process.env.NODE_ENV === "development");
@@ -427,9 +410,7 @@ await new Promise((resolve, reject) => {
     if (isLocalDev && !isElectron) {
       try {
         await open(url);
-      } catch (err) {
-        console.warn("Could not open browser automatically:", err);
-      }
+      } catch {}
     }
 
     resolve(srv);

@@ -184,7 +184,17 @@ function fitBoundsIfNeeded() {
 function buildLegendContainer() {
   const el = document.createElement("div");
   el.className = "gm-legend";
-  el.innerHTML = `<div class="title">Legend</div>`;
+  
+  const header = document.createElement("div");
+  header.className = "legend-header";
+  header.innerHTML = `
+    <div class="title">Legend</div>
+    <button class="toggle-btn" aria-label="Toggle legend">−</button>
+  `;
+  el.appendChild(header);
+  
+  const content = document.createElement("div");
+  content.className = "legend-content";
 
   for (const phase of PHASE_ORDER) {
     const row = document.createElement("div");
@@ -195,7 +205,7 @@ function buildLegendContainer() {
       <span class="label">${phase}</span>
       <span class="count" style="margin-left:6px;color:#475569;"></span>
     `;
-    el.appendChild(row);
+    content.appendChild(row);
   }
 
   if (!PHASE_ORDER.includes("Other")) {
@@ -207,8 +217,19 @@ function buildLegendContainer() {
       <span class="label">Other</span>
       <span class="count" style="margin-left:6px;color:#475569;"></span>
     `;
-    el.appendChild(row);
+    content.appendChild(row);
   }
+  
+  el.appendChild(content);
+  
+  // Toggle handler
+  const toggleBtn = header.querySelector('.toggle-btn');
+  toggleBtn.addEventListener('click', () => {
+    const isCollapsed = content.style.display === 'none';
+    content.style.display = isCollapsed ? 'block' : 'none';
+    toggleBtn.textContent = isCollapsed ? '−' : '+';
+    toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
+  });
 
   map.controls[google.maps.ControlPosition.LEFT_BOTTOM].push(el);
   return el;
@@ -404,10 +425,65 @@ function initUI() {
   });
 
   const sb = document.getElementById("searchBox");
-  if (sb) sb.addEventListener("input", (e) => {
-    currentFilterText = e.target.value || "";
-    applyFilters();
-  });
+  const dropdown = document.getElementById("autocompleteDropdown");
+  
+  if (sb && dropdown) {
+    sb.addEventListener("input", (e) => {
+      const query = (e.target.value || "").trim().toLowerCase();
+      currentFilterText = query;
+      
+      // Show autocomplete suggestions
+      if (query.length > 0) {
+        const matches = Array.from(markersById.values())
+          .filter(m => m.__name.includes(query))
+          .map(m => m.getTitle())
+          .filter((v, i, a) => a.indexOf(v) === i) // unique
+          .slice(0, 8); // limit to 8 results
+        
+        if (matches.length > 0) {
+          dropdown.innerHTML = matches.map(name => 
+            `<div class="autocomplete-item" data-name="${name.replace(/"/g, '&quot;')}">${name}</div>`
+          ).join('');
+          dropdown.style.display = 'block';
+        } else {
+          dropdown.style.display = 'none';
+        }
+      } else {
+        dropdown.style.display = 'none';
+      }
+      
+      applyFilters();
+    });
+    
+    // Handle autocomplete item clicks
+    dropdown.addEventListener('click', (e) => {
+      const item = e.target.closest('.autocomplete-item');
+      if (item) {
+        const name = item.getAttribute('data-name');
+        sb.value = name;
+        currentFilterText = name.toLowerCase();
+        dropdown.style.display = 'none';
+        applyFilters();
+        
+        // Find and focus on the selected marker
+        for (const m of markersById.values()) {
+          if (m.getTitle() === name) {
+            map.setCenter(m.getPosition());
+            map.setZoom(12);
+            google.maps.event.trigger(m, 'click');
+            break;
+          }
+        }
+      }
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!sb.contains(e.target) && !dropdown.contains(e.target)) {
+        dropdown.style.display = 'none';
+      }
+    });
+  }
 
   const btn = document.getElementById("refreshBtn");
   if (btn) btn.addEventListener("click", () => fetchProjects({ force: true, full: true }));
@@ -477,7 +553,12 @@ async function initMapAndRun() {
     map = new google.maps.Map(document.getElementById("map"), {
       center: { lat: 39.8283, lng: -98.5795 },
       zoom: 4,
-      mapTypeControl: false,
+      mapTypeControl: true,
+      mapTypeControlOptions: {
+        style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR,
+        position: google.maps.ControlPosition.TOP_RIGHT,
+        mapTypeIds: ['roadmap', 'satellite', 'hybrid', 'terrain']
+      },
       streetViewControl: false,
     });
 
