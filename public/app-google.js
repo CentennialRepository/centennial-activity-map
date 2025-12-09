@@ -32,6 +32,9 @@ let map, geocoder;
 let markersById = new Map();
 let currentFilterText = "";
 const enabledPhases = new Set(Object.keys(PHASE_COLORS));
+let availableFields = []; // All fields from AIRTABLE_FIELDS in order
+let visibleFields = new Set(['name', 'phase', 'address']); // User-selected fields to display
+const FIELD_STORE_KEY = 'cam_visible_fields_v1';
 // Phase filter persistence
 const PHASE_STORE_KEY = 'cam_phase_filters_v1';
 function loadPhasePrefs() {
@@ -83,10 +86,75 @@ function normalizePhase(p) {
 }
 
 function popupHtml(r) {
-  const name = r.name || "(no name)";
-  const phase = normalizePhase(r.phase);
-  const address = r.address || "";
-  return `<div><strong>${name}</strong><br/><em>${phase}</em><br/><span>${address}</span></div>`;
+  const lines = [];
+  const allFields = r.allFields || {};
+  
+  // Build popup content based on visible fields
+  // Iterate through available fields in order, but only show if selected
+  for (const field of availableFields) {
+    if (!visibleFields.has(field)) continue;
+    let value = '';
+    let label = field;
+    
+    // Handle core fields
+    if (field === 'name') {
+      value = r.name || "(no name)";
+      label = 'Name';
+      if (value) lines.push(`<div class="popup-field"><strong>${value}</strong></div>`);
+    } else if (field === 'phase') {
+      value = normalizePhase(r.phase);
+      label = 'Phase';
+      if (value) lines.push(`<div class="popup-field"><em>${value}</em></div>`);
+    } else if (field === 'address') {
+      value = r.address || '';
+      label = 'Address';
+      if (value) lines.push(`<div class="popup-field">${value}</div>`);
+    } else if (field === 'lastModified') {
+      value = r.lastModified || '';
+      label = 'Last Modified';
+      if (value) lines.push(`<div class="popup-field"><span class="field-label">Modified:</span> ${value}</div>`);
+    } else if (allFields[field] != null) {
+      // Handle dynamic Airtable fields
+      value = allFields[field];
+      
+      // Check if this is an Airtable attachment field (array of objects with url property)
+      if (Array.isArray(value) && value.length > 0 && value[0]?.url) {
+        // Render attachments as clickable links
+        const attachmentLinks = value.map((att, idx) => {
+          const filename = att.filename || `Attachment ${idx + 1}`;
+          const url = att.url;
+          const icon = getAttachmentIcon(att.type || att.filename);
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="attachment-link">${icon} ${filename}</a>`;
+        }).join('');
+        lines.push(`<div class="popup-field"><span class="field-label">${field}:</span><div class="attachment-list">${attachmentLinks}</div></div>`);
+      } else if (Array.isArray(value)) {
+        // Regular array (not attachments)
+        value = value.join(', ');
+        if (value) lines.push(`<div class="popup-field"><span class="field-label">${field}:</span> ${value}</div>`);
+      } else if (typeof value === 'object') {
+        value = JSON.stringify(value);
+        if (value) lines.push(`<div class="popup-field"><span class="field-label">${field}:</span> ${value}</div>`);
+      } else {
+        if (value) lines.push(`<div class="popup-field"><span class="field-label">${field}:</span> ${value}</div>`);
+      }
+    }
+  }
+  
+  return `<div class="popup-content">${lines.join('')}</div>`;
+}
+
+function getAttachmentIcon(typeOrFilename) {
+  const type = (typeOrFilename || '').toLowerCase();
+  
+  if (type.includes('pdf')) return '📄';
+  if (type.includes('image') || type.includes('jpg') || type.includes('png') || type.includes('gif')) return '🖼️';
+  if (type.includes('video') || type.includes('mp4') || type.includes('mov')) return '🎥';
+  if (type.includes('word') || type.includes('doc')) return '📝';
+  if (type.includes('excel') || type.includes('xls') || type.includes('csv')) return '📊';
+  if (type.includes('powerpoint') || type.includes('ppt')) return '📽️';
+  if (type.includes('zip') || type.includes('rar')) return '📦';
+  
+  return '📎'; // Default attachment icon
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -201,9 +269,12 @@ function buildLegendContainer() {
     row.className = "row";
     row.dataset.phase = phase;
     row.innerHTML = `
-      <span class="dot" style="background:${PHASE_COLORS[phase]}"></span>
-      <span class="label">${phase}</span>
-      <span class="count" style="margin-left:6px;color:#475569;"></span>
+      <div class="phase-header">
+        <span class="dot" style="background:${PHASE_COLORS[phase]}"></span>
+        <span class="label">${phase}</span>
+        <span class="count" style="margin-left:6px;color:#475569;"></span>
+      </div>
+      <div class="project-list" style="display:none;"></div>
     `;
     content.appendChild(row);
   }
@@ -213,9 +284,12 @@ function buildLegendContainer() {
     row.className = "row";
     row.dataset.phase = "Other";
     row.innerHTML = `
-      <span class="dot" style="background:${PHASE_COLORS["Other"]}"></span>
-      <span class="label">Other</span>
-      <span class="count" style="margin-left:6px;color:#475569;"></span>
+      <div class="phase-header">
+        <span class="dot" style="background:${PHASE_COLORS["Other"]}"></span>
+        <span class="label">Other</span>
+        <span class="count" style="margin-left:6px;color:#475569;"></span>
+      </div>
+      <div class="project-list" style="display:none;"></div>
     `;
     content.appendChild(row);
   }
@@ -250,22 +324,92 @@ function addLegendControl() {
   legendEl = buildLegendContainer();
   legendEl.querySelectorAll(".row").forEach(row => {
     const phase = row.dataset.phase;
-    row.style.cursor = "pointer";
+    const header = row.querySelector('.phase-header');
+    const projectList = row.querySelector('.project-list');
+    
+    header.style.cursor = "pointer";
     // Initial opacity reflects persisted state
     row.style.opacity = enabledPhases.has(phase) ? 1 : 0.45;
-    row.addEventListener("click", () => {
-      if (enabledPhases.has(phase)) {
-        enabledPhases.delete(phase);
-        row.style.opacity = 0.45;
+    
+    header.addEventListener("click", (e) => {
+      // Toggle project list
+      const isExpanded = projectList.style.display === 'block';
+      
+      if (isExpanded) {
+        // Collapse list
+        projectList.style.display = 'none';
       } else {
-        enabledPhases.add(phase);
-        row.style.opacity = 1;
+        // Expand list and populate with projects
+        populateProjectList(phase, projectList);
+        projectList.style.display = 'block';
       }
-      applyFilters();
-      savePhasePrefs();
+    });
+    
+    // Right-click or Ctrl+click to toggle phase filter
+    header.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      togglePhaseFilter(phase, row);
     });
   });
   updateLegendCounts(lastLegendCounts);
+}
+
+function togglePhaseFilter(phase, row) {
+  if (enabledPhases.has(phase)) {
+    enabledPhases.delete(phase);
+    row.style.opacity = 0.45;
+  } else {
+    enabledPhases.add(phase);
+    row.style.opacity = 1;
+  }
+  applyFilters();
+  savePhasePrefs();
+  // Sync with dropdown checkbox
+  const cb = document.querySelector(`input[data-phase="${phase}"]`);
+  if (cb) cb.checked = enabledPhases.has(phase);
+}
+
+function populateProjectList(phase, container) {
+  const projects = [];
+  
+  // Collect all projects in this phase
+  for (const marker of markersById.values()) {
+    const title = marker.getTitle();
+    const markerPhase = marker.__phase || 'Other';
+    
+    if (normalizePhase(markerPhase) === phase) {
+      projects.push({
+        name: title,
+        marker: marker
+      });
+    }
+  }
+  
+  // Sort alphabetically
+  projects.sort((a, b) => a.name.localeCompare(b.name));
+  
+  // Render project list
+  container.innerHTML = projects.map(p => `
+    <div class="project-item" data-name="${p.name}">${p.name}</div>
+  `).join('');
+  
+  // Add click handlers
+  container.querySelectorAll('.project-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = item.getAttribute('data-name');
+      
+      // Find and focus on marker
+      for (const m of markersById.values()) {
+        if (m.getTitle() === name) {
+          map.setCenter(m.getPosition());
+          map.setZoom(15);
+          google.maps.event.trigger(m, 'click');
+          break;
+        }
+      }
+    });
+  });
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -378,6 +522,9 @@ async function renderRecordsProgressively(records) {
   removeMarkersNotIn(idSet);
   applyFilters();
   setStatus(`Loaded ${idSet.size} projects`);
+  
+  // Update field selector with available fields
+  updateFieldSelector(records);
 }
 
 // Loading overlay helpers (unused)
@@ -412,6 +559,26 @@ async function fetchProjects(opts = {}) {
 // Controls & scaling
 ////////////////////////////////////////////////////////////////////////////////
 function initUI() {
+  // Phase filter dropdown toggle
+  const phaseBtn = document.getElementById('phaseFilterBtn');
+  const phaseDropdown = document.getElementById('phaseDropdown');
+  
+  if (phaseBtn && phaseDropdown) {
+    phaseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isVisible = phaseDropdown.style.display === 'block';
+      phaseDropdown.style.display = isVisible ? 'none' : 'block';
+    });
+    
+    // Close when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.phase-filter-selector')) {
+        phaseDropdown.style.display = 'none';
+      }
+    });
+  }
+  
+  // Phase checkboxes
   document.querySelectorAll('input[type="checkbox"][data-phase]').forEach(cb => {
     const phase = cb.getAttribute('data-phase');
     cb.checked = enabledPhases.has(phase);
@@ -487,7 +654,94 @@ function initUI() {
 
   const btn = document.getElementById("refreshBtn");
   if (btn) btn.addEventListener("click", () => fetchProjects({ force: true, full: true }));
+  
+  // Field selector (dropdown for selecting which fields to display)
+  initFieldSelector();
 }
+
+function initFieldSelector() {
+  const btn = document.getElementById('fieldSelectorBtn');
+  const dropdown = document.getElementById('fieldDropdown');
+  
+  if (!btn || !dropdown) return;
+  
+  // Load saved preferences
+  try {
+    const saved = localStorage.getItem(FIELD_STORE_KEY);
+    if (saved) {
+      visibleFields = new Set(JSON.parse(saved));
+    }
+  } catch {}
+  
+  // Toggle dropdown
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isVisible = dropdown.style.display === 'block';
+    dropdown.style.display = isVisible ? 'none' : 'block';
+  });
+  
+  // Close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.field-selector')) {
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
+function updateFieldSelector(records) {
+  if (!records || records.length === 0) return;
+  
+  // Extract field names in the order they appear (from AIRTABLE_FIELDS)
+  const firstRecord = records[0];
+  if (firstRecord && firstRecord.allFields) {
+    availableFields = Object.keys(firstRecord.allFields);
+    renderFieldSelector();
+  }
+}
+
+function renderFieldSelector() {
+  const dropdown = document.getElementById('fieldDropdown');
+  if (!dropdown) return;
+  
+  // Render fields in the order from AIRTABLE_FIELDS (preserved in availableFields)
+  dropdown.innerHTML = availableFields.map(field => {
+    const checked = visibleFields.has(field) ? 'checked' : '';
+    const displayName = field.charAt(0).toUpperCase() + field.slice(1).replace(/([A-Z])/g, ' $1');
+    return `
+      <label class="field-option">
+        <input type="checkbox" value="${field}" ${checked}>
+        <span>${displayName}</span>
+      </label>
+    `;
+  }).join('');
+  
+  // Add change listeners
+  dropdown.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const field = e.target.value;
+      if (e.target.checked) {
+        visibleFields.add(field);
+      } else {
+        visibleFields.delete(field);
+      }
+      // Save preferences
+      try {
+        localStorage.setItem(FIELD_STORE_KEY, JSON.stringify(Array.from(visibleFields)));
+      } catch {}
+      // Update all marker info windows
+      updateAllMarkerInfoWindows();
+    });
+  });
+}
+
+function updateAllMarkerInfoWindows() {
+  // Mark all markers to refresh content on next click
+  for (const marker of markersById.values()) {
+    marker.__needsUpdate = true;
+  }
+}
+
+
 
 function installZoomScaler() {
   map.addListener("zoom_changed", () => {

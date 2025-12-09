@@ -169,13 +169,16 @@ function normalizeAirtable(records) {
   const out = [];
   for (const r of records) {
     const f = r.fields || {};
+    // Extract known critical fields
     const name = pick(f, ["Project Name","Name","Project"]);
     const phase = pick(f, ["Phase","Project Phase"]);
     const address = pick(f, ["Address","Site Address","Project Address","Location","Street Address"]);
     const lat = pick(f, ["Latitude","Lat","LAT","Y","Y (lat)"]);
     const lng = pick(f, ["Longitude","Lng","LONG","X","X (lng)"]);
     const lastMod = pick(f, ["Last Modified","Last modified","LastModified","Last Modified Time"]);
-    out.push({
+    
+    // Build output with critical fields + all other fields dynamically
+    const record = {
       id: r.id,
       name: name || "",
       phase: phase || "",
@@ -183,7 +186,28 @@ function normalizeAirtable(records) {
       lat: lat == null ? null : (Number(lat) || null),
       lng: lng == null ? null : (Number(lng) || null),
       lastModified: lastMod || null,
-    });
+      allFields: {} // Store all raw fields for dynamic display
+    };
+    
+    // Add all fields from Airtable (excluding coordinate fields only)
+    for (const [key, value] of Object.entries(f)) {
+      const keyLower = key.toLowerCase();
+      // Skip only coordinate fields (keep all other fields even if empty)
+      if (!keyLower.includes('latitude') && 
+          !keyLower.includes('longitude') && 
+          !keyLower.includes('lat') && 
+          !keyLower.includes('lng') &&
+          !keyLower.includes('coord')) {
+        // Sanitize key name: NeDB doesn't allow $ at start or . in field names
+        // Replace $ at the start with underscore, and replace all dots with underscores
+        let sanitizedKey = key.startsWith('$') ? '_' + key.slice(1) : key;
+        sanitizedKey = sanitizedKey.replace(/\./g, '_');
+        // Store the value as-is (including null/empty for consistency)
+        record.allFields[sanitizedKey] = value;
+      }
+    }
+    
+    out.push(record);
   }
   return out;
 }
@@ -221,17 +245,27 @@ const buildSinceFormula = (sinceIso) =>
 
 // -------------------- Sync engine --------------------
 async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
+  console.log("[SYNC] Starting sync check...");
   const now = Date.now();
   const patMode = CSV_URL === "";
   const lastSyncTs = (await getMeta("lastSync"))?.value || 0;
   const lastFullTs = (await getMeta("lastFullResync"))?.value || 0;
   const lastHash   = (await getMeta("viewHash"))?.value || null;
 
+  console.log(`[SYNC] lastSyncTs: ${lastSyncTs}, lastFullTs: ${lastFullTs}, SYNC_TTL_MS: ${SYNC_TTL_MS}`);
+  
   const ttlExpired  = forceSync || (now - lastSyncTs) > SYNC_TTL_MS;
   const fullExpired = (now - lastFullTs) > FULL_RESYNC_HOURS * 3600 * 1000;
 
+  console.log(`[SYNC] ttlExpired: ${ttlExpired}, fullExpired: ${fullExpired}`);
+  
   let doFull = forceFull || !lastSyncTs || !patMode || fullExpired;
-  if (!ttlExpired && !doFull) return { synced: false, reason: "fresh", mode: patMode ? "airtable" : "csv" };
+  console.log(`[SYNC] doFull: ${doFull} (forceFull: ${forceFull}, !lastSyncTs: ${!lastSyncTs}, !patMode: ${!patMode}, fullExpired: ${fullExpired})`);
+  
+  if (!ttlExpired && !doFull) {
+    console.log("[SYNC] Skipping sync - data is fresh");
+    return { synced: false, reason: "fresh", mode: patMode ? "airtable" : "csv" };
+  }
 
   try {
     let records = [];
@@ -245,6 +279,7 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
       doFull = true;
     } else {
       if (doFull) {
+        console.log(`[SYNC] Fetching from Airtable (FULL) - Base: ${AIRTABLE_BASE_ID}, Table: ${AIRTABLE_TABLE_NAME}, View: ${AIRTABLE_VIEW_NAME}`);
         const recs = await fetchAllRecords({
           baseId: AIRTABLE_BASE_ID,
           tableName: AIRTABLE_TABLE_NAME,
@@ -252,7 +287,9 @@ async function syncIfStale({ forceFull = false, forceSync = false } = {}) {
           viewName: AIRTABLE_VIEW_NAME,
           fields: AIRTABLE_FIELDS
         });
+        console.log(`[SYNC] Received ${recs.length} records from Airtable`);
         records = normalizeAirtable(recs);
+        console.log(`[SYNC] Normalized to ${records.length} records`);
       } else {
         const sinceIso = new Date(lastSyncTs).toISOString();
         const filterByFormula = buildSinceFormula(sinceIso);
@@ -376,15 +413,36 @@ app.get("/api/stream", (req, res) => {
 
 // Projects list (with optional force / full query)
 app.get("/api/projects", async (req, res) => {
-  const info = await syncIfStale({ forceFull: req.query?.full === "1", forceSync: req.query?.force === "1" });
-
+  console.log(`[API] /api/projects called - force: ${req.query?.force}, full: ${req.query?.full}`);
+  
+  // First, check if database is empty
   const docs = await new Promise((resolve, reject) =>
     projectsDb.find({}).sort({ name: 1 }).exec((e, d) => e ? reject(e) : resolve(d))
   );
+  
+  // If database is empty but we have sync metadata, force a full resync
+  const lastSyncTs = (await getMeta("lastSync"))?.value || 0;
+  const needsFullResync = docs.length === 0 && lastSyncTs > 0;
+  
+  if (needsFullResync) {
+    console.log(`[API] Database empty but metadata exists - forcing full resync`);
+  }
+  
+  const info = await syncIfStale({ 
+    forceFull: req.query?.full === "1" || needsFullResync, 
+    forceSync: req.query?.force === "1" || needsFullResync
+  });
+  console.log(`[API] Sync result:`, info);
+
+  // Fetch updated docs after sync
+  const updatedDocs = await new Promise((resolve, reject) =>
+    projectsDb.find({}).sort({ name: 1 }).exec((e, d) => e ? reject(e) : resolve(d))
+  );
+  console.log(`[API] Returning ${updatedDocs.length} documents from NeDB`);
 
   res.set("X-Mode", CSV_URL === "" ? "AIRTABLE" : "CSV");
   res.set("X-Sync", info.synced ? (info.full ? "FULL" : "INCR") : "HIT");
-  res.json({ source: "nedb", count: docs.length, records: docs, sync: info });
+  res.json({ source: "nedb", count: updatedDocs.length, records: updatedDocs, sync: info });
 });
 
 // -------------------- Protected SPA fallback (must be after /api/*) --------------------
@@ -407,6 +465,10 @@ await new Promise((resolve, reject) => {
     // Auto-open the browser ONLY for local dev (not in Render/production)
     const isLocalDev = !RUNNING_ON_RENDER && (!process.env.NODE_ENV || process.env.NODE_ENV === "development");
     const isElectron = !!process.env.ELECTRON;
+    
+    console.log(`✓ Server running at ${url}`);
+    console.log(`✓ Mode: ${CSV_URL === "" ? "AIRTABLE" : "CSV"}`);
+    
     if (isLocalDev && !isElectron) {
       try {
         await open(url);

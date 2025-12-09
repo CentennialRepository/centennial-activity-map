@@ -21,17 +21,30 @@
           </div>
         </div>
         <div id="controlPanel" class="controls">
-          <div class="phase-filters">
-            <label><input type="checkbox" data-phase="Not Helioscoped" checked> Not Helioscoped</label>
-            <label><input type="checkbox" data-phase="Helioscoped Projects" checked> Helioscoped</label>
-            <label><input type="checkbox" data-phase="Early Stage Pipeline Projects" checked> Early</label>
-            <label><input type="checkbox" data-phase="Late Stage Pipeline Projects" checked> Late</label>
-            <label><input type="checkbox" data-phase="Operating Projects" checked> Operating</label>
-            <label><input type="checkbox" data-phase="Other" checked> Other</label>
+          <div class="phase-filter-wrapper">
+            <label for="phaseFilter">Filter Phases:</label>
+            <div class="phase-filter-selector">
+              <button id="phaseFilterBtn" class="phase-filter-btn">Select Phases ▾</button>
+              <div id="phaseDropdown" class="phase-dropdown" style="display:none;">
+                <label class="phase-option"><input type="checkbox" data-phase="Not Helioscoped" checked> <span class="phase-dot" style="background:#1e88e5;"></span> Not Helioscoped</label>
+                <label class="phase-option"><input type="checkbox" data-phase="Helioscoped Projects" checked> <span class="phase-dot" style="background:#7e57c2;"></span> Helioscoped Projects</label>
+                <label class="phase-option"><input type="checkbox" data-phase="Early Stage Pipeline Projects" checked> <span class="phase-dot" style="background:#e53935;"></span> Early Stage Pipeline</label>
+                <label class="phase-option"><input type="checkbox" data-phase="Late Stage Pipeline Projects" checked> <span class="phase-dot" style="background:#fdd835;"></span> Late Stage Pipeline</label>
+                <label class="phase-option"><input type="checkbox" data-phase="Operating Projects" checked> <span class="phase-dot" style="background:#43a047;"></span> Operating Projects</label>
+                <label class="phase-option"><input type="checkbox" data-phase="Other" checked> <span class="phase-dot" style="background:#607d8b;"></span> Other</label>
+              </div>
+            </div>
           </div>
           <div class="search">
             <input id="searchBox" type="text" placeholder="Search project name..." autocomplete="off" />
             <div id="autocompleteDropdown" class="autocomplete-dropdown"></div>
+          </div>
+          <div class="field-selector-wrapper">
+            <label for="visibleFields">Show Fields:</label>
+            <div class="field-selector" id="fieldSelectorContainer">
+              <button id="fieldSelectorBtn" class="field-selector-btn">Select Fields ▾</button>
+              <div id="fieldDropdown" class="field-dropdown" style="display:none;"></div>
+            </div>
           </div>
           <button id="refreshBtn" class="btn">Refresh</button>
           <div class="status" id="status"></div>
