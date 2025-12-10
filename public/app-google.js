@@ -33,8 +33,8 @@ let markersById = new Map();
 let currentFilterText = "";
 const enabledPhases = new Set(Object.keys(PHASE_COLORS));
 let availableFields = []; // All fields from AIRTABLE_FIELDS in order
-let visibleFields = new Set(['name', 'phase', 'address']); // User-selected fields to display
-const FIELD_STORE_KEY = 'cam_visible_fields_v1';
+let visibleFields = new Set(['name', 'phase', 'address', 'utility', 'kwdc', 'kwac', 'helioscope']); // User-selected fields to display
+const FIELD_STORE_KEY = 'cam_visible_fields_v2'; // Changed version to force reset
 // Phase filter persistence
 const PHASE_STORE_KEY = 'cam_phase_filters_v1';
 function loadPhasePrefs() {
