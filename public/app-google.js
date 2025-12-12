@@ -33,8 +33,9 @@ let markersById = new Map();
 let currentFilterText = "";
 const enabledPhases = new Set(Object.keys(PHASE_COLORS));
 let availableFields = []; // All fields from AIRTABLE_FIELDS in order
-let visibleFields = new Set(['name', 'phase', 'address', 'utility', 'kwdc', 'kwac', 'helioscope']); // User-selected fields to display
+let visibleFields = new Set(); // User-selected fields to display
 const FIELD_STORE_KEY = 'cam_visible_fields_v2'; // Changed version to force reset
+let hasSavedVisibleFields = false;
 // Phase filter persistence
 const PHASE_STORE_KEY = 'cam_phase_filters_v1';
 function loadPhasePrefs() {
@@ -481,7 +482,7 @@ function countByPhaseFromRecords(records) {
   return counts;
 }
 
-async function renderRecordsProgressively(records) {
+async function renderRecordsProgressively(records, fieldOrder = []) {
   const idSet = new Set();
   const have = [], need = [];
 
@@ -524,7 +525,7 @@ async function renderRecordsProgressively(records) {
   setStatus(`Loaded ${idSet.size} projects`);
   
   // Update field selector with available fields
-  updateFieldSelector(records);
+  updateFieldSelector(records, fieldOrder);
 }
 
 // Loading overlay helpers (unused)
@@ -547,7 +548,7 @@ async function fetchProjects(opts = {}) {
     updateLegendCounts(countByPhaseFromRecords(json.records || []));
     if (!opts.force) firstFitDone = false;
 
-    await renderRecordsProgressively(json.records || []);
+    await renderRecordsProgressively(json.records || [], json.fields || []);
   } catch (e) {
     console.error(e);
     showOverlayError(e && e.message ? e.message : "Error loading data");
@@ -670,6 +671,7 @@ function initFieldSelector() {
     const saved = localStorage.getItem(FIELD_STORE_KEY);
     if (saved) {
       visibleFields = new Set(JSON.parse(saved));
+      hasSavedVisibleFields = true;
     }
   } catch {}
   
@@ -688,15 +690,37 @@ function initFieldSelector() {
   });
 }
 
-function updateFieldSelector(records) {
+function updateFieldSelector(records, fieldOrder = []) {
   if (!records || records.length === 0) return;
-  
-  // Extract field names in the order they appear (from AIRTABLE_FIELDS)
-  const firstRecord = records[0];
-  if (firstRecord && firstRecord.allFields) {
-    availableFields = Object.keys(firstRecord.allFields);
-    renderFieldSelector();
+
+  let orderedFields = Array.isArray(fieldOrder) ? fieldOrder.filter(Boolean) : [];
+
+  if (!orderedFields.length) {
+    const fieldSet = new Set();
+    for (const rec of records) {
+      if (!rec?.allFields) continue;
+      for (const key of Object.keys(rec.allFields)) {
+        if (!fieldSet.has(key)) fieldSet.add(key);
+      }
+    }
+    orderedFields = Array.from(fieldSet);
   }
+
+  if (!orderedFields.length) return;
+
+  availableFields = orderedFields.slice();
+
+  if (!hasSavedVisibleFields) {
+    visibleFields = new Set(availableFields);
+  } else {
+    const prevVisible = new Set(visibleFields);
+    visibleFields = new Set(availableFields.filter(field => prevVisible.has(field)));
+    if (visibleFields.size === 0) {
+      visibleFields = new Set(availableFields);
+    }
+  }
+
+  renderFieldSelector();
 }
 
 function renderFieldSelector() {

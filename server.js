@@ -101,6 +101,15 @@ const AIRTABLE_VIEW_NAME  = process.env.AIRTABLE_VIEW_NAME || "";
 const AIRTABLE_FIELDS     = (process.env.AIRTABLE_FIELDS || "")
   .split(",").map(s => s.trim()).filter(Boolean);
 
+const sanitizeFieldName = (key = "") => {
+  if (!key) return key;
+  let sanitized = key.startsWith("$") ? `_${key.slice(1)}` : key;
+  sanitized = sanitized.replace(/\./g, "_");
+  return sanitized;
+};
+
+const AIRTABLE_FIELDS_SANITIZED = AIRTABLE_FIELDS.map(sanitizeFieldName);
+
 const CSV_URL = (process.env.AIRTABLE_SHARED_CSV_URL || "").trim();
 const SYNC_TTL_MS       = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000);
 const FULL_RESYNC_HOURS = Number(process.env.FULL_RESYNC_HOURS || 24);
@@ -198,10 +207,7 @@ function normalizeAirtable(records) {
           !keyLower.includes('lat') && 
           !keyLower.includes('lng') &&
           !keyLower.includes('coord')) {
-        // Sanitize key name: NeDB doesn't allow $ at start or . in field names
-        // Replace $ at the start with underscore, and replace all dots with underscores
-        let sanitizedKey = key.startsWith('$') ? '_' + key.slice(1) : key;
-        sanitizedKey = sanitizedKey.replace(/\./g, '_');
+        const sanitizedKey = sanitizeFieldName(key);
         // Store the value as-is (including null/empty for consistency)
         record.allFields[sanitizedKey] = value;
       }
@@ -442,7 +448,13 @@ app.get("/api/projects", async (req, res) => {
 
   res.set("X-Mode", CSV_URL === "" ? "AIRTABLE" : "CSV");
   res.set("X-Sync", info.synced ? (info.full ? "FULL" : "INCR") : "HIT");
-  res.json({ source: "nedb", count: updatedDocs.length, records: updatedDocs, sync: info });
+  res.json({
+    source: "nedb",
+    count: updatedDocs.length,
+    records: updatedDocs,
+    fields: AIRTABLE_FIELDS_SANITIZED,
+    sync: info,
+  });
 });
 
 // -------------------- Protected SPA fallback (must be after /api/*) --------------------
