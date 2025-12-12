@@ -61,9 +61,20 @@ let pollTimer = null;
 ////////////////////////////////////////////////////////////////////////////////
 // UI helpers
 ////////////////////////////////////////////////////////////////////////////////
-function setStatus(msg) {
+function setStatus(msg, { force = false } = {}) {
   const el = document.getElementById("status");
-  if (el) el.textContent = msg || "";
+  if (!el) return;
+  const normalized = (msg || "").trim();
+  if (!normalized) {
+    el.textContent = "";
+    return;
+  }
+  const lower = normalized.toLowerCase();
+  if (force || lower.startsWith("loaded") || lower.includes("error")) {
+    el.textContent = normalized;
+  } else {
+    el.textContent = "";
+  }
 }
 
 function showOverlayError(msg) {
@@ -123,9 +134,9 @@ function popupHtml(r) {
         // Render attachments as clickable links
         const attachmentLinks = value.map((att, idx) => {
           const filename = att.filename || `Attachment ${idx + 1}`;
-          const url = att.url;
           const icon = getAttachmentIcon(att.type || att.filename);
-          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="attachment-link">${icon} ${filename}</a>`;
+          const safeUrl = `/api/attachment?url=${encodeURIComponent(att.url)}`;
+          return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="attachment-link">${icon} ${filename}</a>`;
         }).join('');
         lines.push(`<div class="popup-field"><span class="field-label">${field}:</span><div class="attachment-list">${attachmentLinks}</div></div>`);
       } else if (Array.isArray(value)) {

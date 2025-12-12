@@ -398,6 +398,40 @@ app.get("/api/health", async (_req, res) => {
   res.json({ ok: true, mode: CSV_URL === "" ? "airtable" : "csv", lastSync, lastFull, viewHash, now: Date.now() });
 });
 
+app.get("/api/attachment", async (req, res) => {
+  const rawUrl = (req.query.url || "").trim();
+  if (!rawUrl) return res.status(400).send("Missing url");
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (err) {
+    return res.status(400).send("Invalid url");
+  }
+
+  const allowed = ["airtable.com", "dl.airtable.com"];
+  if (!allowed.some(host => parsed.hostname.endsWith(host))) {
+    return res.status(400).send("Unsupported attachment host");
+  }
+
+  try {
+    const headers = AIRTABLE_API_TOKEN ? { Authorization: `Bearer ${AIRTABLE_API_TOKEN}` } : {};
+    const attachmentRes = await fetch(parsed.href, { headers });
+    if (!attachmentRes.ok) {
+      const msg = await attachmentRes.text().catch(() => attachmentRes.statusText);
+      return res.status(attachmentRes.status).send(msg || "Attachment fetch failed");
+    }
+    const type = attachmentRes.headers.get("content-type");
+    if (type) res.set("Content-Type", type);
+    const disp = attachmentRes.headers.get("content-disposition");
+    if (disp) res.set("Content-Disposition", disp);
+    attachmentRes.body.pipe(res);
+  } catch (err) {
+    console.error("Attachment proxy error", err);
+    res.status(502).send("Unable to proxy attachment");
+  }
+});
+
 // Config endpoint for frontend
 app.get("/api/config", (_req, res) => {
   // Expose only the value the front-end needs
